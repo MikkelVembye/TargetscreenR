@@ -1,0 +1,133 @@
+#' @title Sample target studies with or withour replacement
+#'
+#' @description
+#' `sample_target` implements the target set sampling algorithm from Hou & Tipton (2024) when `n` is
+#' NULL and `relevant_col` is provided, providing a formal reliability guarantee.
+#' Defined as the probability of achieving `c_target` recall is at least `1 - c_target^k`.
+#'
+#' The algorithm uses with replacement as default. This means that relevant records are returned to the
+#' pool after selection, making draws independent without needing to know the total number of 
+#' relevant records (L). See [Hou & Tipton (2024)](https://doi.org/10.1002/jrsm.1690) for details.
+#'
+#' @param data Dataset containing records with relevance labels.
+#' @param n Integer. Number of rows to sample using simple random sampling. If
+#'   provided, `relevant_col`, `c_target`, and `R_c` are ignored and simple random
+#'   sampling is used directly. If NULL and `relevant_col` is provided, k (the
+#'   target set size) is computed from `c_target` and `R_c`.
+#' @param relevant_col Character string naming the binary relevance column (1 = relevant).
+#'   Only used when `n` is NULL; otherwise falls back to simple random sampling behaviour.
+#' @param c_target Numeric in (0,1). Desired recall level (e.g. 0.95). Used to compute k.
+#' @param R_c Numeric in (0,1). Desired reliability, i.e. probability of achieving
+#'   `c_target` recall (e.g. 0.90). Used to compute k.
+#' @param with_replacement Logical. Whether to sample with replacement. Default TRUE. 
+#' Only used in simple random sampling.
+#' @param id_col Character string naming the record ID column. Default `"record_id"`.
+#' @param prob_vec Vector of probability weights. Only used in simple random sampling.
+#'   Default is a uniform vector of 1/n.
+#' @param seed Integer. Random seed for reproducibility. Default is 123.
+#'
+#' @return When `n` is NULL and `relevant_col` is provided, a list with:
+#'   \item{target_set}{Data frame of k target records}
+#'   \item{target_ids}{Vector of record IDs in the target set}
+#'   \item{k}{Target set size}
+#'   \item{c_target}{Desired recall level}
+#'   \item{R_c}{Desired reliability}
+#'   \item{reliability_guarantee}{Lower bound on probability of achieving c_target recall: 1 - c_target^k}
+#'
+#'   Otherwise (i.e. whenever `n` is provided), returns a data frame of n rows
+#'   (original, simple random sampling behaviour).
+#'
+#' @references
+#' Hou, Z., & Tipton, E. (2024). Enhancing recall in automated record screening:
+#'   A resampling algorithm. \emph{Research Synthesis Methods, 15}(3), 372-383.
+#'   \doi{10.1002/jrsm.1690}
+#'
+#' Vembye, M. H., Christensen, J., Mølgaard, A. B., & Schytt, F. L. W. (2025).
+#'   Generative Pretrained Transformer Models Can Function as Highly Reliable Second
+#'   Screeners of Titles and Abstracts in Systematic Reviews: A Proof of Concept and
+#'   Common Guidelines. \emph{Psychological Methods}.
+#'   \doi{10.1037/met0000769}
+#'
+#' @examples
+#' \dontrun{
+#' # Compute k from c_target and R_c:
+#' target_studies <- sample_target(
+#'   data = combined_data,
+#'   relevant_col = "decision_binary",
+#'   c_target = 0.95,
+#'   R_c = 0.90
+#' )
+#'
+#'}
+#' @export
+
+sample_target <- 
+  function(
+    data,
+    n = NULL, # MHV: Can we remove n here?
+    relevant_col = NULL,
+    c_target = NULL,
+    R_c = NULL,
+    #with_replacement = FALSE,
+    id_col = "record_id",
+    #prob_vec = NULL,
+    seed = 123
+) {
+
+  if (!is.null(seed)) {
+    set.seed(seed)
+  } else {
+    warning("No seed provided. Results may not be reproducible.")
+  }
+
+  # ------------------------------------------------------------------
+  # Sampling with replacement (Hou & Tipton)
+  # ------------------------------------------------------------------
+  if (is.null(n) && !is.null(relevant_col)) {
+
+    if (!id_col %in% names(data)) {
+      stop(
+        "`id_col` = \"", id_col, "\" was not found in `data`.\n",
+        "Please specify the name of the record ID column via the `id_col` argument."
+      )
+    }
+
+    if (is.null(c_target) || is.null(R_c)) {
+      stop("Provide `n`, or both `c_target` and `R_c` to compute k, when `relevant_col` is supplied.")
+    }
+    n <- ceiling(log(1 - R_c) / log(c_target))
+
+    k <- n
+    n_relevant <- sum(data[[relevant_col]] == 1, na.rm = TRUE)
+
+    if (n_relevant < k) {
+      stop(paste0(
+        "Only ", n_relevant, " relevant records available but k = ", k, " required.\n",
+        "Consider reducing `c_target` or `R_c`."
+      ))
+    }
+  
+    target_data <- data |>
+      dplyr::filter(.data[[relevant_col]] == 1) |>
+      dplyr::slice_sample(n = k, replace = TRUE)
+
+    guarantee <- if (!is.null(c_target)) 1 - c_target^k else NA_real_
+
+    if (!is.null(c_target) && !is.null(R_c)) {
+      message(paste0(
+        "Target set of size k = ", k, " sampled with replacement.\n",
+        "Reliability guarantee: P(recall >= ", c_target, ") >= ", round(guarantee, 4)
+      ))
+    }
+
+    return(list(
+      target_set = target_data,
+      target_ids = target_data[[id_col]],
+      k = k,
+      c_target = c_target,
+      R_c = R_c,
+      reliability_guarantee = guarantee
+    ))
+  }
+
+}
