@@ -64,7 +64,7 @@
 sample_target <- 
   function(
     data,
-    n = NULL, # MHV: Can we remove n here?
+    n = NULL, # MHV: Can we remove n here? Or change it to k?
     relevant_col = NULL,
     c_target = NULL,
     R_c = NULL,
