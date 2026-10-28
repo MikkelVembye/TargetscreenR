@@ -13,7 +13,9 @@
 #' The TF-IDF use english stopwords, drops terms in fewer than 5 records and terms in more than 90% of the records, 
 #' then keeps the tfidf_max_terms most frequent terms.
 #'
-#' @param data Data frame containing the corpus to be embedded. Must contain columns "eppi_id", "title", and "abstract".
+#' @param data Data frame containing the corpus to be embedded. It needs a unique record id column, a
+#'   title column and an abstract column. By default these are called "eppi_id", "title" and
+#'   "abstract". Use `id_col`, `title_col` and `abstract_col` if yours have other names.
 #' @param model Character string specifying the model to use for embedding. Can be a sentence-transformers 
 #'   model name or "tfidf" for a text2vec TF-IDF matrix.
 #' @param python_dir Character string specifying the path to the Python executable. Only needed for sentence-transformers models.
@@ -27,17 +29,25 @@
 #' @param tfidf_max_terms Integer specifying the number of most frequent terms to keep as columns for "tfidf" model.
 #'  Default is 1000. Reasonable values for this parameter are between 500 and 2000. 
 #'  Lower values reduce memory usage and speed up training, but may lose information.
+#' @param id_col Character string with the name of the column holding the unique record id.
+#'   Default is "eppi_id".
+#' @param title_col Character string with the name of the title column. Default is "title".
+#' @param abstract_col Character string with the name of the abstract column. Default is "abstract".
 #' @param data_name Character string used as the first part of the file name. Default is the name of
 #'   the data frame you pass in. You normally do not need to set this.
 #'
 #' @return Invisibly, the path to the saved `.rds` file. The file holds a matrix with one row per
-#'   record (named by `eppi_id`) and one column per embedding dimension (or per term for "tfidf").
+#'   record (named by the values of `id_col`) and one column per embedding dimension (or per term for "tfidf").
 #'   The file is named `<data name>_<model>.rds`. If it already exists, embedding is skipped
 #'   and the existing path is returned.
 #'
 #' @examples
 #' \dontrun{
-#' # combined_data needs the columns eppi_id, title and abstract
+#' # combined_data needs an id, a title and an abstract column (eppi_id, title and abstract by default)
+#'
+#' # Other column names
+#' embed_corpus(combined_data, model = "tfidf", dir = "embeddings",
+#'              id_col = "record_id", title_col = "Title", abstract_col = "Abstract")
 #'
 #' # TF-IDF: no Python needed
 #' embed_corpus(combined_data, model = "tfidf", dir = "embeddings")
@@ -62,13 +72,19 @@ embed_corpus <-
     dir = NULL,
     batch_size = 32L,
     tfidf_max_terms = 1000,
+    id_col = "eppi_id",
+    title_col = "title",
+    abstract_col = "abstract",
     data_name = deparse(substitute(data))
   ) {
 
   #####################################################
   # Initial checks
   #####################################################
-  required_cols <- c("eppi_id", "title", "abstract")
+  required_cols <- c(id_col, title_col, abstract_col)
+  if (!all(vapply(required_cols, function(x) is.character(x) && length(x) == 1, logical(1)))) {
+    stop("`id_col`, `title_col` and `abstract_col` must each be a single column name.")
+  }
   if (!all(required_cols %in% colnames(data))) {
     stop("Data frame must contain columns: ", paste(required_cols, collapse = ", "))
   }
@@ -110,11 +126,11 @@ embed_corpus <-
 
   # Every record in the corpus is embedded, so any subset an iteration draws can be looked up
   # by eppi_id. Ids must be unique.
-  ids <- as.character(data[["eppi_id"]])
+  ids <- as.character(data[[id_col]])
   stopifnot(!anyNA(ids), !anyDuplicated(ids))
 
   # Embed the corpus by concatenating the title and abstract for each record
-  text <- paste(data$title, data$abstract)
+  text <- paste(data[[title_col]], data[[abstract_col]])
 
   if (model == "tfidf") {
     # Stopwords, terms in fewer than 5 records and terms in more than 90% of the records are dropped,
@@ -182,8 +198,8 @@ embed_corpus <-
 
   rownames(embeddings) <- ids
 
-  # Save the embeddings
-  saveRDS(embeddings, path)
+  # Save the embeddings as parquet
+  arrow::write_parquet(embeddings, path)
 
   invisible(path)
   }

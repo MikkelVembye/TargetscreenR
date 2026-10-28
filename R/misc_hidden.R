@@ -46,11 +46,9 @@
 # The numbers kept for each iteration, taken from the prioritized data of one run
 .summarise_run <- function(res) {
   last_target_row <- max(res$row_number[res$is_target == 1L], na.rm = TRUE) # last row of the target
-  n_relevant <- sum(res$included_final == 1, na.rm = TRUE) # number of relevant records in the data
-  found <- sum(res$included_final == 1 & res$row_number <= last_target_row, na.rm = TRUE) # number of relevant records found before the last target row
+
   list(
     workload_saved = attr(res, "screen_decisions_info")$workload_saved,
-    recall_pstar = if (n_relevant == 0L) NA_real_ else found / n_relevant,
     pct_needed_to_find_target = last_target_row / nrow(res)
   )
 }

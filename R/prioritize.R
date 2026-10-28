@@ -21,7 +21,7 @@
 #' The steps are described in detail below:
 #' 
 #' 1. **Split off the finally included studies.** Records with `included_final == 1` are set aside.
-#'    They are the ground truth used to check the result, and some of them become seed studies.
+#'    They are the ground truth, and some of them become seed studies.
 #' 
 #' 2. **Draw an irrelevant test set.** In the real workflow, humans screen a development set of
 #'    records (the seed records plus a random sample, set V in the algorithm) to build and validate
@@ -35,8 +35,9 @@
 #'    `decision_binary` set to 0, as if the AI had excluded them. These are called *AI-missed* records.
 #'    Use this to test how robust the workflow is when the AI screener misses relevant records.
 #' 
-#' 4. **Pick seed studies.** A share `seed_pct` of the finally included studies the AI did catch (at
-#'    least 2) become the seed studies. Seeds are known to be relevant before screening starts. 
+#' 4. **Pick seed studies.** A share `seed_pct` of the finally included studies the AI did catch
+#'    become the seed studies. There can be few of them, or none (`seed_pct = 0`). Seeds are known
+#'    to be relevant before screening starts.
 #'    [Hou & Tipton (2024)](https://doi.org/10.1002/jrsm.1690) point out that such records are not a 
 #'    random sample of the relevant records, so
 #'    they must not be used as target records. They are only used to help train the classifier. The
@@ -51,7 +52,9 @@
 #'    replacement, until `k` relevant records have been found. 
 #' 
 #' 7. **Split the seeds.** The seed studies are split into a training part (S_t, a share
-#'    `seed_train_pct`) and a held-out validation part (S_v, the rest).
+#'    `seed_train_pct`) and a held-out validation part (S_v, the rest). By default
+#'    (`seed_train_pct = 1`) all seed studies are used for training and none are held out. Use a
+#'    lower value to keep some seed studies out of the training, as a test of the ranking.
 #' 
 #' 8. **Build the training data.** The included training set is `I = S_t + (AH+ minus T)`. The target
 #'    records are left out on purpose, so the classifier never learns from them. The irrelevant
@@ -79,22 +82,24 @@
 #' records the AI included (double-screened by humans), and *among target* is the non-target records
 #' screened before the last target record is reached in the ranking.
 #'
-#' **Embeddings.** The embeddings are looked up by `eppi_id` in a file made by [embed_corpus()]. If
-#' that file does not exist yet for this data frame name and model, it is created automatically the
-#' first time (this needs the columns `title` and `abstract`, and can take a while).
+#' **Embeddings.** The embeddings are looked up by the record id (`id_col`) in a file made by
+#' [embed_corpus()]. If that file does not exist yet for this data frame name and model, it is
+#' created automatically the first time (this needs the title and abstract columns, see `title_col`
+#' and `abstract_col`, and can take a while).
 #'
 #' **Randomness.** All random steps (test set, flipping, seeds, target sampling, training set E)
 #' depend on the seed set by `seed`. Pass a number to get the same result every time. The exception
 #' is the target sampling, which deliberately uses no fixed seed of its own, so that different
 #' iterations give different target sets.
 #'
-#' @param data Data frame with one row per record. It must contain the columns `eppi_id` (unique
-#'   record id), `included_final` (1 = finally included, 0 = not), `decision_binary` (AI screening
-#'   decision, 1 = include) and the column named in `included_var`. The column `human_code` (human
-#'   screening decision, 1 = include) is optional. Without it, `included_var` cannot be
-#'   `"human_and_ai_in"` unless that column already exists. Pass the data frame by its plain variable name, and use the same
-#'   name as in [embed_corpus()] (e.g. `combined_data` in both). The name is used to find the
-#'   saved embeddings.
+#' @param data Data frame with one row per record. It must contain the record id column (`id_col`,
+#'   `eppi_id` by default, unique), `included_final` (1 = finally included, 0 = not),
+#'   `decision_binary` (AI screening decision, 1 = include) and the column named in `included_var`.
+#'   The column `human_code` (human screening decision, 1 = include) is optional. Without it,
+#'   `included_var` cannot be `"human_and_ai_in"` unless that column already exists.
+#'
+#'   Pass the data frame by its plain variable name, and use the same name as in [embed_corpus()]
+#'   (e.g. `combined_data` in both). The name is used to find the saved embeddings.
 #' @param model Character string with the embedding model that was used in [embed_corpus()], e.g.
 #'   `"all-MiniLM-L6-v2"` or `"tfidf"`.
 #' @param n_irrelevant_test_records Integer. Number of records that both the AI and the humans
@@ -123,17 +128,26 @@
 #'   AI-missed, to simulate an AI screener that misses relevant records. Default is 0 (no flipping),
 #'   and 1 means the AI missed all of them.
 #' @param seed_pct Numeric between 0 and 1. Share of the AI-caught finally included studies used as
-#'   seed studies. Default is 1 (all of them). At least 2 seeds are always used. The studies that
-#'   are not used as seeds go back into the candidate pool as ordinary records.
+#'   seed studies. Default is 1 (all of them). Use a lower value if you have few good seed studies,
+#'   and 0 for no seed studies at all (then only the records the AI and the humans agree on, minus
+#'   the target, are used to train the classifier). The studies that are not used as seeds go back
+#'   into the candidate pool as ordinary records.
 #' @param seed_train_pct Numeric between 0 and 1. Share of the seed studies used for training the
 #'   classifier (S_t). The rest are held out (S_v) and are added to the ranked set as extra
-#'   validation records. Default is 0.5.
+#'   validation records. Default is 1 (all seed studies are used for training, none are held out).
+#'   Lower it, for example to 0.5, to keep some seed studies out of the training as a test.
 #' @param embed_dir Character string with the folder where the embeddings are saved and read.
 #'   Default is the current working directory. If no embeddings exist yet for this data frame and
-#'   model, they are created here with [embed_corpus()] (`data` then needs the columns `title` and
-#'   `abstract`). This can take a while, so if you run this function many times, run
+#'   model, they are created here with [embed_corpus()] (`data` then needs the title and abstract
+#'   columns). This can take a while, so if you run this function many times, run
 #'   [embed_corpus()] once first.
 #' @param seed Integer or NULL. Random seed for reproducibility. Default is NULL (no seed set).
+#' @param id_col Character string with the name of the unique record id column. Default is
+#'   "eppi_id". The same column must have been used in [embed_corpus()].
+#' @param title_col Character string with the name of the title column. Default is "title". Only
+#'   used if the embeddings have to be created.
+#' @param abstract_col Character string with the name of the abstract column. Default is "abstract".
+#'   Only used if the embeddings have to be created.
 #' @param data_name Character string or NULL. Name used to find the saved embeddings. Default is
 #'   NULL, which uses the name of the data frame you pass in. You normally do not need to set this.
 #'
@@ -165,7 +179,7 @@
 #'
 #' @examples
 #' \dontrun{
-#' # 1. Embed the corpus once (needs the columns eppi_id, title and abstract)
+#' # 1. Embed the corpus once (needs an id, a title and an abstract column)
 #' embed_corpus(combined_data, model = "all-MiniLM-L6-v2", dir = "embeddings")
 #'
 #' # 2. Rank the records that still need to be screened
@@ -202,9 +216,12 @@
       alpha         = 0, 
       ai_miss_pct   = 0,
       seed_pct      = 1,
-      seed_train_pct = 0.5,
+      seed_train_pct = 1,
       embed_dir     = NULL,
       seed          = NULL,
+      id_col        = "eppi_id",
+      title_col     = "title",
+      abstract_col  = "abstract",
       data_name     = NULL
   ) {
 
@@ -219,7 +236,11 @@
     stop("`data` must be a data frame.")
   }
 
-  required_cols <- c("eppi_id", "included_final", "decision_binary")
+  if (!is.character(id_col) || length(id_col) != 1) {
+    stop("`id_col` must be a single column name.")
+  }
+
+  required_cols <- c(id_col, "included_final", "decision_binary")
   if (!all(required_cols %in% colnames(data))) {
     stop("`data` must contain columns: ", paste(required_cols, collapse = ", "))
   }
@@ -290,7 +311,8 @@
   model_file <- gsub("/", "--", model, fixed = TRUE)
   if (!file.exists(file.path(embed_dir, paste0(data_name, "_", model_file, ".rds")))) {
     message("No embeddings found for '", data_name, "' with model '", model, "'. Creating them now. This can take a while.")
-    embed_corpus(data, model = model, dir = embed_dir, data_name = data_name)
+    embed_corpus(data, model = model, dir = embed_dir, id_col = id_col, title_col = title_col,
+                 abstract_col = abstract_col, data_name = data_name)
   }
 
   total_records <- nrow(data)
@@ -303,9 +325,9 @@
   embeddings <- .load_embeddings(data_name, model, dir = embed_dir)
 
   # Every record must have an embedding, otherwise the file is out of date or belongs to other data
-  missing_ids <- setdiff(as.character(data[["eppi_id"]]), rownames(embeddings))
+  missing_ids <- setdiff(as.character(data[[id_col]]), rownames(embeddings))
   if (length(missing_ids) > 0) {
-    stop(length(missing_ids), " of the ", nrow(data), " records have no embedding (e.g. eppi_id ",
+    stop(length(missing_ids), " of the ", nrow(data), " records have no embedding (e.g. ", id_col, " ",
          paste(utils::head(missing_ids, 3), collapse = ", "), ").\n",
          "The saved embeddings in '", embed_dir, "' for '", data_name, "' and model '", model,
          "' do not match `data`. Delete that .rds file and run again to create new embeddings.",
@@ -321,9 +343,9 @@
   final_inc_studies <- data |> dplyr::filter(included_final == 1)
   data              <- data |> dplyr::filter(included_final == 0)
 
-  # Ground truth for the reliability check
+  # Ground truth
   total_true_relevant <- nrow(final_inc_studies)
-  
+
   # Draw the irrelevant test set only from records both AI and human excluded. At this point `data`
   # holds only records with included_final == 0, so without human_code the AI decision is enough.
   if (has_human_code) {
@@ -358,26 +380,30 @@
     caught_final_inc <- final_inc_studies
   }
 
-  # Extract seed studies as a percentage of the finally included studies
-  if (nrow(caught_final_inc) < 2) {
-    stop("At least 2 finally included studies that the AI included are needed as seed studies, but only ",
-         nrow(caught_final_inc), " found. Lower ai_miss_pct or check `included_final` and `decision_binary`.",
-         call. = FALSE)
-  }
-  n_seed <- max(2L, as.integer(round(seed_pct * nrow(caught_final_inc))))
+  # Extract seed studies as a percentage of the finally included studies the AI caught.
+  # There can be few seed studies, or none: with seed_pct = 0 (or when the share rounds to 0)
+  # the classifier is trained without seed studies.
+  n_seed <- as.integer(round(seed_pct * nrow(caught_final_inc)))
 
-  # Both the training part and the held-out part of the seeds need at least 1 study
-  n_seed_train <- round(seed_train_pct * n_seed)
-  if (n_seed_train < 1 || n_seed_train > n_seed - 1) {
-    stop("With ", n_seed, " seed studies and seed_train_pct = ", seed_train_pct, ", ", n_seed_train,
-         " would be used for training and ", n_seed - n_seed_train, " held out. Both need at least 1. ",
-         "Change seed_pct or seed_train_pct.", call. = FALSE)
+  if (n_seed == 0L) {
+    known_seed_studies <- caught_final_inc[FALSE, , drop = FALSE]
+    non_seed_final_inc <- caught_final_inc
+  } else {
+    # The training part of the seeds needs at least 1 study. If some seeds are held out
+    # (seed_train_pct < 1), the held-out part needs at least 1 study too.
+    n_seed_train <- round(seed_train_pct * n_seed)
+    if (n_seed_train < 1 || (seed_train_pct < 1 && n_seed_train > n_seed - 1)) {
+      stop("With ", n_seed, " seed studies and seed_train_pct = ", seed_train_pct, ", ", n_seed_train,
+           " would be used for training and ", n_seed - n_seed_train, " held out. ",
+           "Training needs at least 1, and if some are held out, so does the held-out part. ",
+           "Change seed_pct or seed_train_pct (1 uses all seeds for training).", call. = FALSE)
+    }
+
+    seed_idx <- sample.int(nrow(caught_final_inc), size = n_seed)
+    known_seed_studies <- caught_final_inc[seed_idx, , drop = FALSE]
+    non_seed_final_inc <- caught_final_inc[-seed_idx, , drop = FALSE]
   }
 
-  seed_idx <- sample.int(nrow(caught_final_inc), size = n_seed)
-  known_seed_studies <- caught_final_inc[seed_idx, , drop = FALSE]
-  non_seed_final_inc <- caught_final_inc[-seed_idx, , drop = FALSE]
-  
   # Candidate pool P = data, with the non-seed finally included studies folded back in as ordinary records
   data <- 
     data |> 
@@ -404,7 +430,7 @@
     relevant_col = included_var,
     c_target = c_target,
     R_c = R_c,
-    id_col = "eppi_id",
+    id_col = id_col,
     seed = NULL # Set seed to null to allow for variance across simulations
   ) |>
     suppressWarnings()
@@ -418,7 +444,7 @@
   Sv <- known_seed_studies[-St_idx, ]
 
   # Step 16: Define the included training set as: 𝐈 = 𝐒t%∪(𝐀𝐇+\ 𝐓)
-  I_set <- dplyr::bind_rows(St, ah_plus |> dplyr::filter(!.data[["eppi_id"]] %in% target_ids))
+  I_set <- dplyr::bind_rows(St, ah_plus |> dplyr::filter(!.data[[id_col]] %in% target_ids))
 
   # Of the truly relevant studies, how many are already known via the training set I_set
   known_relevant_n <- sum(I_set[["included_final"]] == 1, na.rm = TRUE)
@@ -432,7 +458,7 @@
     )
 
   # Embeddings are precomputed over the whole corpus, so every record an iteration can draw is
-  # already present; rows are pulled by eppi_id. Duplicated ids (E_set is sampled with
+  # already present; rows are pulled by record id. Duplicated ids (E_set is sampled with
   # replacement) resolve to the same row, as before.
   emb_rows <- function(ids) {
     idx <- match(as.character(ids), rownames(embeddings))
@@ -440,7 +466,7 @@
   }
 
   # Step 18: Train ℳ using the included training set 𝐈 and the irrelevant training set 𝐄.
-  train_ids <- c(I_set[["eppi_id"]], E_set[["eppi_id"]])
+  train_ids <- c(I_set[[id_col]], E_set[[id_col]])
   x_train   <- emb_rows(train_ids)
   y_train   <- c(rep(1L, nrow(I_set)), rep(0L, nrow(E_set)))
 
@@ -456,10 +482,10 @@
   #a_minus <- a_minus |> dplyr::filter(!.data[["eppi_id"]] %in% E_set[["eppi_id"]])
       
   P_star <- dplyr::bind_rows(a_minus, target$target_set, Sv) |>
-    dplyr::distinct(.data[["eppi_id"]], .keep_all = TRUE)
+    dplyr::distinct(.data[[id_col]], .keep_all = TRUE)
 
   # Step 20: Use ℳ to rank all records in 𝐏∗.
-  x_pstar <- emb_rows(P_star[["eppi_id"]])
+  x_pstar <- emb_rows(P_star[[id_col]])
   
   if (alpha == 2) {
     P_star$priority_score <- stats::predict(fit, data = x_pstar)$predictions[, "1"]
@@ -508,9 +534,9 @@
   res <- 
     P_star |> 
     dplyr::mutate(
-      is_target = dplyr::if_else(eppi_id %in% target_ids, 1L, 0L),
-      is_seed = dplyr::if_else(eppi_id %in% Sv[["eppi_id"]], 1L, 0L),
-      is_ai_missed = dplyr::if_else(eppi_id %in% ai_missed[["eppi_id"]], 1L, 0L)
+      is_target = dplyr::if_else(.data[[id_col]] %in% target_ids, 1L, 0L),
+      is_seed = dplyr::if_else(.data[[id_col]] %in% Sv[[id_col]], 1L, 0L),
+      is_ai_missed = dplyr::if_else(.data[[id_col]] %in% ai_missed[[id_col]], 1L, 0L)
     )
   
   target_rows <- res$row_number[res$is_target == 1L]

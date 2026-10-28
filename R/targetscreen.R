@@ -14,10 +14,13 @@
 #' existing ones unchanged.
 #'
 #' @details
-#' **What is a best run?** A run is only a candidate if it reached the goal, i.e. if
-#' `recall_pstar >= c_target`. This leaves out lucky runs that saved a lot of work by missing
-#' relevant studies. Among the candidates, the runs with the highest `workload_saved` are the best.
-#' `keep_pct` sets how many of the candidates are kept: `0.05` keeps the best 5 percent.
+#' **What is a best run?** The runs with the highest `workload_saved` are the best. `keep_pct` sets
+#' how many are kept: `0.05` keeps the best 5 percent.
+#'
+#' Remember that the best runs are the luckiest target draws: the target records happened to be
+#' ones the ranking puts early. Use them to show what is possible, not to report how well the
+#' method performs. Use the averages in `summary` for that. The recall is not calculated, so
+#' nothing here checks whether a run found enough of the relevant studies.
 #'
 #' **Check.** After the rerun, `workload_saved` is compared with the number stored in the first
 #' pass. If they differ, there is a warning. It would mean that something other than the seed
@@ -28,22 +31,26 @@
 #' @param seed Integer. Start value for the seeds. Iteration `i` uses `seed + i`. The seeds are
 #'   what lets the best runs be recreated. If no `seed` is given, `123` is used and there is a
 #'   warning.
-#' @param keep_pct Numeric in (0, 1]. Share of the runs that reached the goal to keep, counted from
-#'   the best. `0.01` keeps the best 1 percent and `0.05` the best 5 percent. At least one run is
-#'   always kept. Default is 0.05.
+#' @param keep_pct Numeric in (0, 1]. Share of the runs to keep, counted from the best.
+#'   `0.01` keeps the best 1 percent and `0.05` the best 5 percent. At least one run is always
+#'   kept. Default is 0.05.
 #' @param python_dir Character string with the path to the Python executable, or NULL. Only used
 #'   if the embeddings do not exist yet and `model` is a sentence-transformers model. If NULL, an
 #'   installed Python with sentence-transformers is looked for, see [embed_corpus()].
+#' @param id_col Character string with the name of the unique record id column. Default is
+#'   "eppi_id".
+#' @param title_col Character string with the name of the title column. Default is "title".
+#' @param abstract_col Character string with the name of the abstract column. Default is
+#'   "abstract".
 #'
 #' @return A list with:
 #'   \item{summary}{A one-row data frame with the design, the number of iterations
-#'     (`n_sim`), the mean recall (`recall_pstar_mean`), the share of runs that reached `c_target`
-#'     (`reliability_pstar` and its standard error), whether that share is at least `R_c`
-#'     (`meets_guarantee`), the mean workload saved (`wl_mean`, `wl_se`), the mean share of
-#'     records needed to find the target (`need_see_mean`, `need_see_se`) and the number of kept
-#'     runs (`n_kept`).}
-#'   \item{iterations}{A data frame with one row per iteration: `iteration`, `seed`,
-#'     `workload_saved`, `recall_pstar`, `pct_needed_to_find_target`, `reached_goal` and `kept`.}
+#'     (`n_sim`), the mean workload saved (`wl_mean`, `wl_se`), the mean share of records needed
+#'     to find the target (`need_see_mean`, `need_see_se`) and the number of kept runs (`n_kept`).}
+#'   \item{iterations}{A data frame with one row per iteration, sorted by `workload_saved` from
+#'     highest to lowest (`iteration` gives the original order). `workload_saved` and
+#'     `pct_needed_to_find_target` are rounded to 3 decimals. The columns are `iteration`, `seed`,
+#'     `workload_saved`, `pct_needed_to_find_target` and `kept`.}
 #'   \item{best_seeds}{The seeds of the kept runs, best first.}
 #'   \item{best}{A named list with the prioritized data of the kept runs (named by seed), best
 #'     first.}
@@ -80,12 +87,15 @@ targetscreen <-
     alpha = 0,
     ai_miss_pct = 0,
     seed_pct = 1,
-    seed_train_pct = 0.5,
+    seed_train_pct = 1,
     embed_dir = NULL,
     iterations = 1000,
     seed,
     keep_pct = 0.05,
-    python_dir = NULL
+    python_dir = NULL,
+    id_col = "eppi_id",
+    title_col = "title",
+    abstract_col = "abstract"
   ) {
 
   # The embedding file is found through the name of the data frame, so pass it on by name
@@ -124,12 +134,16 @@ targetscreen <-
     ai_miss_pct = ai_miss_pct, 
     seed_pct = seed_pct, 
     seed_train_pct = seed_train_pct,
-    embed_dir = embed_dir
+    embed_dir = embed_dir,
+    id_col = id_col,
+    title_col = title_col,
+    abstract_col = abstract_col
   )
 
   # Embed the corpus once, before the iterations. If the embeddings already exist this is skipped.
   # It is done here, not inside the iterations, as their messages are muted and it can take a while.
-  embed_corpus(data, model = model, python_dir = python_dir, dir = embed_dir, data_name = data_name)
+  embed_corpus(data, model = model, python_dir = python_dir, dir = embed_dir, id_col = id_col,
+               title_col = title_col, abstract_col = abstract_col, data_name = data_name)
 
   ######################################################
   # Pass 1: run every iteration, keep only the seed and the numbers
@@ -142,18 +156,16 @@ targetscreen <-
     s <- .summarise_run(.run_iteration(iteration_seeds[[i]], design)) # Get the metrics for this iteration to compare with other iterations
     tibble::tibble(
       iteration = i, seed = iteration_seeds[[i]],
-      workload_saved = s$workload_saved, recall_pstar = s$recall_pstar,
+      workload_saved = s$workload_saved,
       pct_needed_to_find_target = s$pct_needed_to_find_target
     )
   })
   results <- do.call(rbind, iteration_results)
 
   ######################################################
-  # Pick the best runs: goal reached first, then highest workload saved
+  # Pick the best runs: the highest workload saved
   ######################################################
-  results$reached_goal <- !is.na(results$recall_pstar) & results$recall_pstar >= c_target
-
-  candidate_idx <- which(results$reached_goal & !is.na(results$workload_saved))
+  candidate_idx <- which(!is.na(results$workload_saved))
   n_keep <- if (length(candidate_idx) == 0L) 0L else max(1L, ceiling(keep_pct * length(candidate_idx)))
 
   # Highest workload_saved first; ties keep the order of the iterations
@@ -161,8 +173,7 @@ targetscreen <-
   results$kept <- seq_len(nrow(results)) %in% best_idx
 
   if (n_keep == 0L) {
-    warning("No iteration reached the goal (recall_pstar >= c_target), so no best runs were kept.",
-            call. = FALSE)
+    warning("No iteration gave a workload saved, so no best runs were kept.", call. = FALSE)
   }
 
   ######################################################
@@ -186,17 +197,11 @@ targetscreen <-
   ######################################################
   # Summary over all iterations
   ######################################################
-  reliability <- mean(results$reached_goal)
-
   summary <- tibble::tibble(
     data_name = data_name, model = model, included_var = included_var,
     c_target = c_target, R_c = R_c, alpha = alpha,
     ai_miss_pct = ai_miss_pct, seed_pct = seed_pct, seed_train_pct = seed_train_pct,
     n_sim = iterations,
-    recall_pstar_mean = mean(results$recall_pstar, na.rm = TRUE),
-    reliability_pstar = reliability,
-    reliability_pstar_se = sqrt(reliability * (1 - reliability) / iterations),
-    meets_guarantee = reliability >= R_c,
     wl_mean = mean(results$workload_saved, na.rm = TRUE),
     wl_se = .se(results$workload_saved, iterations),
     need_see_mean = mean(results$pct_needed_to_find_target, na.rm = TRUE),
@@ -204,6 +209,12 @@ targetscreen <-
     keep_pct = keep_pct,
     n_kept = n_keep
   )
+
+  # Best workload first. The `iteration` column keeps the original order of the runs.
+  # The numbers are rounded last, so everything above used the exact values.
+  results <- results[order(-results$workload_saved), ]
+  round_cols <- c("workload_saved", "pct_needed_to_find_target")
+  results[round_cols] <- lapply(results[round_cols], round, digits = 3)
 
   list(summary = summary, iterations = results, best_seeds = best_seeds, best = best)
 }
