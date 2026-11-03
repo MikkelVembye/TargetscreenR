@@ -198,8 +198,8 @@ embed_corpus <-
 
   rownames(embeddings) <- ids
 
-  # Save the embeddings as parquet
-  arrow::write_parquet(embeddings, path)
+  # Save the embeddings rds
+  saveRDS(embeddings, path)
 
   invisible(path)
   }

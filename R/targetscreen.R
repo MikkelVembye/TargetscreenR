@@ -42,6 +42,11 @@
 #' @param title_col Character string with the name of the title column. Default is "title".
 #' @param abstract_col Character string with the name of the abstract column. Default is
 #'   "abstract".
+#' @param training_var Character string with the name of a column that marks training records.
+#'   Default is "training". Records with `training == 1` have already been screened and excluded
+#'   (for example edge cases). They are always used as negative training examples, and are not
+#'   candidates for screening and do not count in the workload. If `data` has no such column,
+#'   nothing changes. See [.generate_prioritized_data()].
 #'
 #' @return A list with:
 #'   \item{summary}{A one-row data frame with the design, the number of iterations
@@ -95,7 +100,8 @@ targetscreen <-
     python_dir = NULL,
     id_col = "eppi_id",
     title_col = "title",
-    abstract_col = "abstract"
+    abstract_col = "abstract",
+    training_var = "training"
   ) {
 
   # The embedding file is found through the name of the data frame, so pass it on by name
@@ -137,7 +143,8 @@ targetscreen <-
     embed_dir = embed_dir,
     id_col = id_col,
     title_col = title_col,
-    abstract_col = abstract_col
+    abstract_col = abstract_col,
+    training_var = training_var
   )
 
   # Embed the corpus once, before the iterations. If the embeddings already exist this is skipped.

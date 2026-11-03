@@ -59,7 +59,8 @@
 #' 8. **Build the training data.** The included training set is `I = S_t + (AH+ minus T)`. The target
 #'    records are left out on purpose, so the classifier never learns from them. The irrelevant
 #'    training set E is sampled from the irrelevant test records, with the aim of having as many
-#'    records as I.
+#'    records as I. If `data` has training records (see `training_var`), all of them are always in
+#'    E, and the random part of E is smaller by the same number.
 #' 
 #' 9. **Train the classifier.** The model is fitted on the embedding vectors of I (label 1) and E
 #'    (label 0). With `alpha` between 0 and 1 this is a penalised logistic regression
@@ -148,6 +149,15 @@
 #'   used if the embeddings have to be created.
 #' @param abstract_col Character string with the name of the abstract column. Default is "abstract".
 #'   Only used if the embeddings have to be created.
+#' @param training_var Character string with the name of a column that marks training records.
+#'   Default is "training". Training records are records that have already been screened and
+#'   excluded (for example edge cases that you want the classifier to learn from), added to `data`
+#'   with `training == 1`. They are always used as negative training examples, together with the
+#'   random irrelevant records (which are cut back so that E stays about as large as I). They are
+#'   taken out of the candidate pool and do not count in the workload, because they were screened
+#'   before. They need an id, title and abstract like the other records, but the other columns can
+#'   be `NA`. They must not be relevant (`included_final` must not be 1). If `data` has no such
+#'   column, nothing changes.
 #' @param data_name Character string or NULL. Name used to find the saved embeddings. Default is
 #'   NULL, which uses the name of the data frame you pass in. You normally do not need to set this.
 #'
@@ -222,6 +232,7 @@
       id_col        = "eppi_id",
       title_col     = "title",
       abstract_col  = "abstract",
+      training_var  = "training",
       data_name     = NULL
   ) {
 
@@ -315,11 +326,6 @@
                  abstract_col = abstract_col, data_name = data_name)
   }
 
-  total_records <- nrow(data)
-  
-  ## For workload saving computation ##
-  total_screen_decisions <- total_records * 2
-
   # Embeddings are a deterministic function of (data, model) so they
   # are looked up here
   embeddings <- .load_embeddings(data_name, model, dir = embed_dir)
@@ -333,6 +339,27 @@
          "' do not match `data`. Delete that .rds file and run again to create new embeddings.",
          call. = FALSE)
   }
+
+  # Training records: already screened excluded records (for example edge cases) that were added to
+  # `data` and marked with training_var == 1. They are always used as negative training examples.
+  # They are taken out of the candidate pool and do not count in the workload, as they were
+  # screened before. Their embeddings are in the same file as the rest of the data.
+  training_data <- data[FALSE, , drop = FALSE]
+  if (!is.null(training_var) && training_var %in% colnames(data)) {
+    is_training <- data[[training_var]] %in% 1
+    training_data <- data[is_training, , drop = FALSE]
+    data <- data[!is_training, , drop = FALSE]
+
+    if (any(training_data[["included_final"]] %in% 1)) {
+      stop("Some records with ", training_var, " == 1 have included_final == 1. Training records are ",
+           "used as negative examples, so they must not be relevant.", call. = FALSE)
+    }
+  }
+
+  total_records <- nrow(data)
+
+  ## For workload saving computation ##
+  total_screen_decisions <- total_records * 2
 
   run_start_time <- Sys.time()
 
@@ -449,13 +476,15 @@
   # Of the truly relevant studies, how many are already known via the training set I_set
   known_relevant_n <- sum(I_set[["included_final"]] == 1, na.rm = TRUE)
 
-  # Step 17: Randomly sample an irrelevant training set 𝐄    
-  E_set <- 
+  # Step 17: Randomly sample an irrelevant training set 𝐄. The training records (if any) are always
+  # in E, and E is filled up with random records to the size of I.
+  E_set <-
     irrelevant_test_study |>
     dplyr::slice_sample(
-      n = nrow(I_set),
+      n = max(0L, nrow(I_set) - nrow(training_data)),
       replace = FALSE
-    )
+    ) |>
+    dplyr::bind_rows(training_data)
 
   # Embeddings are precomputed over the whole corpus, so every record an iteration can draw is
   # already present; rows are pulled by record id. Duplicated ids (E_set is sampled with
@@ -517,6 +546,7 @@
       seed_train_pct = seed_train_pct,
       included_var = included_var,
       ai_miss_pct = ai_miss_pct,
+      n_training_records = nrow(training_data),
       run_time_sec = run_time_sec
   ) |> 
     dplyr::mutate(
